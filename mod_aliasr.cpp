@@ -23,9 +23,38 @@
 #include "include/nlsCommonSdk/Token.h"
 
 
+using std::map;
+using std::string;
+using std::vector;
+using std::cout;
+using std::endl;
+using std::ifstream;
+using std::ios;
+
+
+
+
+
+using namespace AlibabaNlsCommon;
+
+using AlibabaNls::NlsClient;
+using AlibabaNls::NlsEvent;
+using AlibabaNls::LogDebug;
+using AlibabaNls::LogInfo;
+using AlibabaNls::AudioDataStatus;
+using AlibabaNls::AUDIO_FIRST;
+using AlibabaNls::AUDIO_MIDDLE;
+using AlibabaNls::AUDIO_LAST;
+using AlibabaNls::SpeechRecognizerSyncRequest;
+
+
+
+
+
+
 #define SIMPLEVAD_START_SYNTAX "{threshold_adjust_ms=200,max_threshold=1300,threshold=130,voice_ms=60,voice_end_ms=850}"
 #define FRAME_SIZE 3200
-#define SAMPLE_RATE 16000
+#define SAMPLE_RATE 8000
 
 
 
@@ -65,40 +94,18 @@ typedef struct aliasr_session_s {
     switch_audio_resampler_t *write_resampler;
     int voicecount;
 	int testvoicedata;
+	SpeechRecognizerSyncRequest* request;
 	
 } aliasr_session_t;
 
 
-
-using std::map;
-using std::string;
-using std::vector;
-using std::cout;
-using std::endl;
-using std::ifstream;
-using std::ios;
-
-
-
-
-
-using namespace AlibabaNlsCommon;
-
-using AlibabaNls::NlsClient;
-using AlibabaNls::NlsEvent;
-using AlibabaNls::LogDebug;
-using AlibabaNls::LogInfo;
-using AlibabaNls::AudioDataStatus;
-using AlibabaNls::AUDIO_FIRST;
-using AlibabaNls::AUDIO_MIDDLE;
-using AlibabaNls::AUDIO_LAST;
-using AlibabaNls::SpeechRecognizerSyncRequest;
 
 // 自定义线程参数
 struct ParamStruct {
     string fileName;
     string token;
     string appkey;
+	SpeechRecognizerSyncRequest* request;
 };
 
 
@@ -143,185 +150,6 @@ unsigned int getSendAudioSleepTime(const int dataSize,
 
     return sleepMs;
 }
-
-
-
-
-
-
-// 工作线程
-void* pthreadFunc(void* arg) {
-    int sleepMs = 0;
-
-    // 0: 从自定义线程参数中获取token, 音频文件等参数.
-    ParamStruct* tst = (ParamStruct*)arg;
-    if (tst == NULL) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "arg is not valid.\n");	
-
-        return NULL;
-    }
-
-    // 打开音频文件, 获取数据
-	FILE* file = fopen(tst->fileName.c_str(), "rb");
-	if (NULL == file) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wav isn't exist. now val is %s\n",tst->fileName.c_str());	
-
-		return NULL;
-	}
-	fseek(file, 0, SEEK_END);
-	int fileSize = ftell(file);  // 获取音频文件的长度
-	fseek(file, 0, SEEK_SET);
-
-    /*
-    * 创建一句话同步识别SpeechRecognizerSyncRequest对象
-    * request对象在一个会话周期内可以重复使用.
-    * 会话周期是一个逻辑概念. 比如Demo中, 指读取, 发送完整个音频文件数据的时间.
-    * 音频文件数据发送结束时, 可以releaseRecognizerSyncRequest()释放对象.
-    * createRecognizerSyncRequest(), sendSyncAudio(), getRecognizerResult(), releaseRecognizerSyncRequest()请在
-    * 同一线程内完成, 跨线程使用可能会引起异常错误。
-	* 如果需要识别多次，请每次创建一个SpeechRecognizerSyncRequest请求，循环执行sendAudio-getRecognizerResult,
-	* 然后释放SpeechRecognizerSyncRequest请求。
-    */
-    /*
-     * 1: 创建一句话同步识别SpeechRecognizerSyncRequest对象
-     */
-    SpeechRecognizerSyncRequest* request = NlsClient::getInstance()->createRecognizerSyncRequest();
-    if (request == NULL) {
-	    cout << "createRecognizerSyncRequest failed." << endl;
-		return NULL;
-    }
-
-	request->setAppKey(tst->appkey.c_str()); // 设置AppKey, 必填参数, 请参照官网申请
-	request->setFormat("pcm"); // 设置音频数据编码格式, 可选参数, 目前支持pcm, opu, opus, speex. 默认是pcm
-	request->setSampleRate(SAMPLE_RATE); // 设置音频数据采样率, 可选参数, 目前支持16000, 8000. 默认是16000
-	request->setIntermediateResult(true); // 设置是否返回中间识别结果, 可选参数. 默认false
-	request->setPunctuationPrediction(true); // 设置是否在后处理中添加标点, 可选参数. 默认false
-	request->setInverseTextNormalization(true); // 设置是否在后处理中执行ITN, 可选参数. 默认false
-    request->setToken(tst->token.c_str()); // 设置账号校验token, 必填参数
-
-	int sentSize = 0;   // 已发送的文件数据大小
-	int retSize = 0;
-	while (sentSize < fileSize) {
-        char data[FRAME_SIZE] = {0};
-		int size = fread(data, sizeof(char), sizeof(char) * FRAME_SIZE, file);
-		AudioDataStatus status;
-		if (sentSize == 0) {
-			status = AUDIO_FIRST;  // 发送第一块音频数据
-		}
-		else if (sentSize + size < fileSize) {
-			status = AUDIO_MIDDLE; // 发送中间音频数据
-		}
-		else if (sentSize + size == fileSize) {
-			status = AUDIO_LAST; // 发送最后一块音频数据
-		}
-
-		sentSize += size;
-
-        /*
-        * 2: 发送音频数据. sendAudio返回-1表示发送失败, 可在getRecognizerResult函数中获得失败的具体信息
-		* 对于第四个参数: format为opu(发送原始音频数据必须为PCM, FRAME_SIZE大小必须为640)时, 需设置为true. 其它格式默认使用false.
-        */
-		retSize = request->sendSyncAudio(data, size, status);
-
-        /*
-        * 语音数据发送控制：
-        * 语音数据是实时的, 不用sleep控制速率, 直接发送即可.
-        * 语音数据来自文件, 发送时需要控制速率, 使单位时间内发送的数据大小接近单位时间原始语音数据存储的大小.
-        */
-		if (retSize > 0) {
-			cout << "sendSyncAudio:" << retSize << endl;
-			sleepMs = getSendAudioSleepTime(retSize, SAMPLE_RATE, 1); // 根据 发送数据大小，采样率，数据压缩比 来获取sleep时间
-		}
-
-        /*
-        * 3: 语音数据发送延时控制
-        */
-#if defined(_WIN32)
-        Sleep(sleepMs);
-#else
-        usleep(sleepMs * 1000);
-#endif
-
-		/*
-		* 4: 获取识别结果
-		* 接收到EventType为TaskFailed, closed, completed事件类型时，停止发送数据
-		* 部分错误可收到多次TaskFailed事件，只要发生TaskFailed事件，请停止发送数据
-		*/
-		bool isFinished = false;
-		std::queue<NlsEvent> eventQueue;
-		request->getRecognizerResult(&eventQueue);
-		while (!eventQueue.empty()) {
-			NlsEvent _event = eventQueue.front();
-			eventQueue.pop();
-
-			NlsEvent::EventType type = _event.getMsgType();
-			switch (type)
-			{
-			case NlsEvent::RecognitionStarted:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer started *************\n");
-			
-				break;
-			case NlsEvent::RecognitionResultChanged:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer has middle result *************\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());
-			
-				break;
-			case NlsEvent::RecognitionCompleted:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer completed *************\n");
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());				
-				isFinished = true;
-				break;
-			case NlsEvent::TaskFailed:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* TaskFailed *************\n");
-		
-				isFinished = true;
-				break;
-			case NlsEvent::Close:
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Closed *************\n");
-			
-				isFinished = true;
-				break;
-			default:
-				break;
-			}
-			cout << "allMessage: " << _event.getAllResponse() << endl;
-		}
-
-		if (isFinished) {
-			break;
-		}
-    }
-
-    // 关闭音频文件
-    fclose(file);
-
-    // 5: 识别结束, 释放request对象
-    NlsClient::getInstance()->releaseRecognizerSyncRequest(request);
-
-	return NULL;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -374,6 +202,8 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 	FILE *fp = NULL; 
 	char  endline[100];
 	char cfilename[200];
+	const char *var;
+	SpeechRecognizerSyncRequest* request = aliasr_t->request;
 	
 
 	switch_channel_t *channel = switch_core_session_get_channel(session);
@@ -393,6 +223,7 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 		switch_codec_implementation_t read_impl = {(switch_codec_type_t)0};
 		switch_core_session_get_read_impl(session, &read_impl);
         switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "asr SWITCH_ABC_TYPE_INIT\n");
+		switch_channel_set_variable(channel, "initany", "ture");
 		break;
 	}
 	case SWITCH_ABC_TYPE_READ_REPLACE:
@@ -400,69 +231,117 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 		switch_frame_t *frame;
 		if ((frame = switch_core_media_bug_get_read_replace_frame(bug))) {
             char *data = (char *) frame->data;
+
+
+
+		AudioDataStatus status;
+		var=switch_channel_get_variable(channel, "initany");
+
+		if (strcasecmp(var,"ture")==0) {
 		
+			status = AUDIO_FIRST;  // 发送第一块音频数据
+			switch_channel_set_variable(channel, "initany", "false");
+		}
+		// else if (!strcasecmp(var,"false")) {
+		// 	status = AUDIO_MIDDLE; // 发送中间音频数据
+		// }
+		// else {
+		// 	status = AUDIO_LAST; // 发送最后一块音频数据
+		// }
+			else {
+			status = AUDIO_MIDDLE; // 发送最后一块音频数据
+		}
 			
-			if (aliasr_t->testvoicedata<strlen(data)){
-
-
-
-					// char *json;
-	if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_DATA) == SWITCH_STATUS_SUCCESS) {
-		switch_channel_event_set_data(channel, event);
-		// switch_event_serialize_json(event, &json);
-		// switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s\n" ,json);
-
-		channle_uuid= switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Channel-Call-UUID"));
-		create_time = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Profile-Created-Time"));
-		answer_time = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Channel-Answered-Time"));
-		tocall = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Destination-Number"));
-		caller = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"variable_sip_to_user"));
-		switch_event_destroy(&event);
-	}
+		// switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "initany is %d\n",status);		
+		request->sendSyncAudio(data, 320, status);
 
 
 
 
 
+		/*
+		* 4: 获取识别结果
+		* 接收到EventType为TaskFailed, closed, completed事件类型时，停止发送数据
+		* 部分错误可收到多次TaskFailed事件，只要发生TaskFailed事件，请停止发送数据
+		*/
+		bool isFinished = false;
+		std::queue<NlsEvent> eventQueue;
+		request->getRecognizerResult(&eventQueue);
+		while (!eventQueue.empty()) {
+			NlsEvent _event = eventQueue.front();
+			eventQueue.pop();
 
-
-
-
-
-				voicecount = switch_channel_get_variable(channel, "voicecount");				
-              	if (voicecount) {
-					  intvoicecount=atoi(voicecount)+1;
-					//    switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "voicecount is %s \n",intvoicecount);
-		                switch_channel_set_variable(channel, "voicecount",switch_mprintf("%d", intvoicecount));       
-						if(intvoicecount>10){
-							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "channels answer_time is  %s\n" ,answer_time);
-		                    switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "channels create_time is  %s\n" ,create_time);
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "now is %ld" ,switch_micro_time_now());
-								
-								strcpy(cfilename,caller);
-								strcat(cfilename,".txt");
-								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " caller  is %s  \n",caller);
-								switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " c is %s  \n",cfilename);
-								fp = fopen(cfilename, "a+");
-								sprintf(endline,"caller:%s,tocall:%s,create time : %s,answer_time : %s,testvoicetime : %ld \n",caller,tocall,create_time,answer_time,switch_micro_time_now());
-								fputs(endline, fp);
-								fclose(fp);
-
-
-							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " test end  \n");							    
-    							SWITCH_STANDARD_STREAM(stream);
-							// channle_uuid = switch_channel_get_variable(channel, "Core-UUID");
-							switch_api_execute("uuid_kill", channle_uuid, NULL, &stream);
-							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " kill uuid %s  \n",channle_uuid);
-							// switch_core_session_hangup_state(aliasr_t->session,SWITCH_FALSE);
-						}
-              	}
-				 else{
-					 switch_channel_set_variable(channel, "voicecount", "0" );
-				 } 
-				 switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "voicecount is %s \n",voicecount);
-              
+			NlsEvent::EventType type = _event.getMsgType();
+			switch (type)
+			{
+			case NlsEvent::RecognitionStarted:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer started *************\n");
+			
+				break;
+			case NlsEvent::RecognitionResultChanged:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer has middle result *************\n");
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());
+			
+				break;
+			case NlsEvent::RecognitionCompleted:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer completed *************\n");
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());				
+				isFinished = true;
+				break;
+			case NlsEvent::TaskFailed:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* TaskFailed *************\n");
+		
+				isFinished = true;
+				break;
+			case NlsEvent::Close:
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Closed *************\n");
+			
+				isFinished = true;
+				break;
+			default:
+				break;
 			}
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "allMessage:%s\n", _event.getAllResponse());	
+	
+		}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	// 				// char *json;
+	// if (switch_event_create(&event, SWITCH_EVENT_CHANNEL_DATA) == SWITCH_STATUS_SUCCESS) {
+	// 	switch_channel_event_set_data(channel, event);
+	// 	// switch_event_serialize_json(event, &json);
+	// 	// switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, "%s\n" ,json);
+
+	// 	channle_uuid= switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Channel-Call-UUID"));
+	// 	create_time = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Profile-Created-Time"));
+	// 	answer_time = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Channel-Answered-Time"));
+	// 	tocall = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"Caller-Destination-Number"));
+	// 	caller = switch_core_strdup(switch_core_session_get_pool(session), switch_event_get_header_nil(event,"variable_sip_to_user"));
+	// 	switch_event_destroy(&event);
+	// }
+
+
+
+
+				//  switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_INFO, "voicecount is %s \n",voicecount);
+              
+			
 			// switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " data lentg is %s  \n",strlen(data));
 			// switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_INFO, " data lentg is %zu  \n",strlen(data));
       
@@ -555,20 +434,6 @@ SWITCH_STANDARD_APP(aliasr_start_app)
 
 
 
-
-    // pthread_t pthreadId;
-
-
-
-    // // 启动一个工作线程, 用于单次识别
-    // pthread_create(&pthreadId, NULL, &pthreadFunc, (void *)&pa);
-
-	// // 启动一个工作线程, 用于循环识别
-	// // pthread_create(&pthreadId, NULL, &multiRecognize, (void *)&pa);
-
-    // pthread_join(pthreadId, NULL);
-
-
     std::time_t curTime = std::time(0);
     if (g_expireTime - curTime < 10) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret.\n");
@@ -576,13 +441,32 @@ SWITCH_STANDARD_APP(aliasr_start_app)
     }
 
 
-    ParamStruct pa;
-    pa.token = g_token;
-    pa.appkey = appkey;
-    pa.fileName = "/usr/local/freeswitch/bin/test1.wav";
+   
 
 
-	pthreadFunc((void *)&pa);
+
+	SpeechRecognizerSyncRequest* request = NlsClient::getInstance()->createRecognizerSyncRequest();
+    if (request == NULL) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "createRecognizerSyncRequest failed.\n");	
+		return ;
+    }
+
+	request->setAppKey(appkey); // 设置AppKey, 必填参数, 请参照官网申请
+	request->setFormat("pcm"); // 设置音频数据编码格式, 可选参数, 目前支持pcm, opu, opus, speex. 默认是pcm
+	request->setSampleRate(SAMPLE_RATE); // 设置音频数据采样率, 可选参数, 目前支持16000, 8000. 默认是16000
+	request->setIntermediateResult(true); // 设置是否返回中间识别结果, 可选参数. 默认false
+	request->setPunctuationPrediction(true); // 设置是否在后处理中添加标点, 可选参数. 默认false
+	request->setInverseTextNormalization(true); // 设置是否在后处理中执行ITN, 可选参数. 默认false
+    request->setToken(g_token.c_str()); // 设置账号校验token, 必填参数
+	cont->request=request;
+
+ 	// ParamStruct pa;
+    // pa.token = g_token;
+    // pa.appkey = appkey;
+	// pa.request = request;
+
+
+	// pthreadFunc((void *)&pa);
 
 
 
@@ -649,39 +533,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "set log failed.\n");
           return (switch_status_t)-1;
     }
-
-
-
-    // ParamStruct pa;
-    // pa.token =(char *) g_token;
-    // pa.appkey =(char *)  appkey;
-    // pa.fileName = "test0.wav";
-
-    // pthread_t pthreadId;
-
-    // // 启动一个工作线程, 用于识别
-    // pthread_create(&pthreadId, NULL, &pthreadFunc, (void *)&pa);
-
-    // pthread_join(pthreadId, NULL);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 	/* indicate that the module should continue to be loaded */
 	return SWITCH_STATUS_SUCCESS;
