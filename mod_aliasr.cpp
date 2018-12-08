@@ -569,6 +569,21 @@ SWITCH_STANDARD_APP(aliasr_start_app)
     // pthread_join(pthreadId, NULL);
 
 
+    std::time_t curTime = std::time(0);
+    if (g_expireTime - curTime < 10) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret.\n");
+         generateToken(g_akId, g_akSecret, &g_token, &g_expireTime);
+    }
+
+
+    ParamStruct pa;
+    pa.token = g_token;
+    pa.appkey = appkey;
+    pa.fileName = "/usr/local/freeswitch/bin/test1.wav";
+
+
+	pthreadFunc((void *)&pa);
+
 
 
 
@@ -650,23 +665,6 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load)
     // pthread_join(pthreadId, NULL);
 
 
-
-    std::time_t curTime = std::time(0);
-    if (g_expireTime - curTime < 10) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret.\n");
-        if (-1 == generateToken(g_akId, g_akSecret, &g_token, &g_expireTime)) {
-            return (switch_status_t)-1 ;
-        }
-    }
-
-
-    ParamStruct pa;
-    pa.token = g_token;
-    pa.appkey = appkey;
-    pa.fileName = "/usr/local/freeswitch/bin/test1.wav";
-
-
-	pthreadFunc((void *)&pa);
 
 
 
