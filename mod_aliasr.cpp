@@ -110,9 +110,9 @@ struct ParamStruct {
 
 
 
-const char * appkey ="gHwAAALd9Yz3ANu6";
-const char * g_akId = "LTAIKhwE86nAV1We";
-const char * g_akSecret = "HbIu8pZXWF3Xzf8VmYhWolOTDJoNCa";
+char * appkey;
+char * g_akId;
+char * g_akSecret;
 string  g_token = "";
 long g_expireTime = -1;
 
@@ -505,6 +505,53 @@ SWITCH_STANDARD_APP(aliasr_start_app)
 
 
 
+static switch_status_t load_config(void)
+{
+	const char *cf = "aliasr.conf";
+	switch_xml_t cfg, xml = NULL, param, settings;
+	switch_status_t status = SWITCH_STATUS_SUCCESS;
+
+	if (!(xml = switch_xml_open_cfg(cf, &cfg, NULL))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Open of %s failed\n", cf);
+		status = SWITCH_STATUS_FALSE;
+		goto done;
+	}
+
+	if ((settings = switch_xml_child(cfg, "settings"))) {
+		for (param = switch_xml_child(settings, "param"); param; param = param->next) {
+			char *var = (char *) switch_xml_attr_soft(param, "name");
+			char *val = (char *) switch_xml_attr_soft(param, "value");
+
+			if (!strcasecmp(var, "appkey")) {
+				if (!zstr(val)) appkey = strdup(val);
+			} else if (!strcasecmp(var, "g_akId")) {
+				if (!zstr(val)) g_akId = strdup(val);
+			} else if (!strcasecmp(var, "g_akSecret")) {
+				if (!zstr(val)) g_akSecret = strdup(val);
+			} 
+		}
+	}
+
+  done:
+	if (xml) {
+		switch_xml_free(xml);
+	}
+
+	return status;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -524,7 +571,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_aliasr_load)
     switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "mod aliasr aload!\n");
 
 
-
+	load_config();
 
 
 
