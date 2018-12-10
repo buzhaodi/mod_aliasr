@@ -1,7 +1,7 @@
 <configuration name="aliasr.conf" description="aliasr configuration">
 	<settings>
-		<param name="appkey" value="gHwAAALd9Yz3ANu6"/>
-		<param name="g_akId" value="LTAIKhwE86nAV1We"/>
-		<param name="g_akSecret" value="HbIu8pZXWF3Xzf8VmYhWolOTDJoNCa"/>
+		<param name="appkey" value="gHwAAALd9Yz123"/>
+		<param name="g_akId" value="LTAIKhwfsE86nsWe"/>
+		<param name="g_akSecret" value="HbIu8dffsF3Xzf8VmYhWolOTDJoNCa"/>
 	</settings>
 </configuration>
