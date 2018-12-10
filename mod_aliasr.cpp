@@ -55,7 +55,7 @@ using AlibabaNls::SpeechRecognizerSyncRequest;
 #define SIMPLEVAD_START_SYNTAX "{threshold_adjust_ms=200,max_threshold=1300,threshold=130,voice_ms=60,voice_end_ms=850}"
 #define FRAME_SIZE 3200
 #define SAMPLE_RATE 8000
-
+#define ALIASR_EVENT_RESULT "mod_aliasr::asrresult"
 
 
 
@@ -280,7 +280,15 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 				break;
 			case NlsEvent::RecognitionResultChanged:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* Recognizer has middle result *************\n");
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "result:%s\n", _event.getResult());
+
+					if (switch_event_create_subclass(&event, SWITCH_EVENT_CUSTOM, ALIASR_EVENT_RESULT) == SWITCH_STATUS_SUCCESS) {
+						switch_channel_event_set_basic_data(channel, event);
+						switch_event_add_header(event, SWITCH_STACK_BOTTOM, "aliasr_result", "%s", _event.getResult());
+						switch_event_fire(&event);
+					}
+
+
 			
 				break;
 			case NlsEvent::RecognitionCompleted:
@@ -290,6 +298,14 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 				break;
 			case NlsEvent::TaskFailed:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* TaskFailed *************\n");
+
+
+				    SWITCH_STANDARD_STREAM(stream);
+							// channle_uuid = switch_channel_get_variable(channel, "Core-UUID");
+							switch_api_execute("uuid_kill", switch_core_session_get_uuid(session), NULL, &stream);
+							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, " kill uuid %s  \n",switch_core_session_get_uuid(session));
+					
+
 		
 				isFinished = true;
 				break;
