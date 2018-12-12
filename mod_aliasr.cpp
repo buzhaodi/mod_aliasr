@@ -299,11 +299,11 @@ static switch_bool_t amd_process_buffer(switch_media_bug_t *bug, void *user_data
 			case NlsEvent::TaskFailed:
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "************* TaskFailed *************\n");
 
-
-				    SWITCH_STANDARD_STREAM(stream);
-							// channle_uuid = switch_channel_get_variable(channel, "Core-UUID");
-							switch_api_execute("uuid_kill", switch_core_session_get_uuid(session), NULL, &stream);
-							switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, " kill uuid %s  \n",switch_core_session_get_uuid(session));
+					switch_channel_set_variable(channel, "initany", "ture");
+				    // SWITCH_STANDARD_STREAM(stream);
+					// 		// channle_uuid = switch_channel_get_variable(channel, "Core-UUID");
+					// 		switch_api_execute("uuid_kill", switch_core_session_get_uuid(session), NULL, &stream);
+					// 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_ERROR, " kill uuid %s  \n",switch_core_session_get_uuid(session));
 					
 
 		
@@ -453,7 +453,10 @@ SWITCH_STANDARD_APP(aliasr_start_app)
     std::time_t curTime = std::time(0);
     if (g_expireTime - curTime < 10) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "the token will be expired, please generate new token by AccessKey-ID and AccessKey-Secret.\n");
-         generateToken(g_akId, g_akSecret, &g_token, &g_expireTime);
+		while (-1== generateToken(g_akId, g_akSecret, &g_token, &g_expireTime)){
+			sleep(1);
+		}
+        
     }
 
 
