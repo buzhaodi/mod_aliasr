@@ -1,4 +1,6 @@
 # mod_aliasr
+让freeswitch 支持 阿里的 asr
+一个让freeswitch调用阿里的实时语音识别sdk，让识别结果通过esl发送出来的模块
 freeswich aliasr
 ### 一个让freeswitch调用阿里的实时语音识别sdk，让识别结果通过esl发送出来的模块
 ## 如何使用：
